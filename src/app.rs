@@ -69,8 +69,8 @@ pub struct App {
     job_output_area: Rect,
     /// Parent area of the Jobs | Details horizontal split (excludes the help line).
     content_area: Rect,
-    /// Width of the Jobs panel as a percentage of `content_area` (Details gets the rest).
-    jobs_panel_pct: u16,
+    /// Custom Jobs panel width (% of `content_area`). `None` keeps upstream's Min(50)/70%.
+    jobs_panel_pct: Option<u16>,
     /// True while the user is dragging the Jobs/Details divider.
     resizing_panels: bool,
     pending_input_event: Option<Event>,
@@ -131,7 +131,7 @@ pub(crate) enum MouseScrollTarget {
 
 const SCANCEL_SIGNALS: &[&str] = &["TERM", "INT", "HUP", "USR1", "USR2", "STOP", "CONT", "KILL"];
 const DIALOG_WIDTH: u16 = 80;
-/// Default Jobs panel width (~30% left when Details was hardcoded to 70%).
+/// Fallback when mapping a drag before the content area is known.
 const JOBS_PANEL_PCT_DEFAULT: u16 = 30;
 const JOBS_PANEL_PCT_MIN: u16 = 15;
 const JOBS_PANEL_PCT_MAX: u16 = 70;
@@ -172,7 +172,7 @@ impl App {
             job_list_area: Rect::default(),
             job_output_area: Rect::default(),
             content_area: Rect::default(),
-            jobs_panel_pct: JOBS_PANEL_PCT_DEFAULT,
+            jobs_panel_pct: None,
             resizing_panels: false,
             pending_input_event: None,
         }
@@ -331,7 +331,7 @@ impl App {
     }
 
     fn resize_panels_to(&mut self, column: u16) {
-        self.jobs_panel_pct = jobs_panel_pct_from_column(column, self.content_area);
+        self.jobs_panel_pct = Some(jobs_panel_pct_from_column(column, self.content_area));
     }
 
     fn handle(&mut self, msg: AppMessage) {
@@ -585,13 +585,13 @@ impl App {
 
         let master_detail = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints(
-                [
-                    Constraint::Percentage(self.jobs_panel_pct),
-                    Constraint::Percentage(100 - self.jobs_panel_pct),
-                ]
-                .as_ref(),
-            )
+            .constraints(match self.jobs_panel_pct {
+                None => [Constraint::Min(50), Constraint::Percentage(70)],
+                Some(jobs_pct) => [
+                    Constraint::Percentage(jobs_pct),
+                    Constraint::Percentage(100 - jobs_pct),
+                ],
+            })
             .split(content_help[0]);
         self.content_area = content_help[0];
 
