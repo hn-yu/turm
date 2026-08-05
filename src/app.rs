@@ -48,7 +48,6 @@ pub enum Dialog {
     SelectCancelSignal { id: String, selected_signal: usize },
     EditTimeLimit { id: String, input: Input },
     CommandError { command: String, output: String },
-    Info(String),
 }
 
 struct CommandFailure {
@@ -448,12 +447,6 @@ impl App {
                         },
                         Dialog::CommandError { .. } => match key.code {
                             KeyCode::Enter | KeyCode::Esc => {
-                                close_dialog = true;
-                            }
-                            _ => {}
-                        },
-                        Dialog::Info(_) => match key.code {
-                            KeyCode::Enter | KeyCode::Esc | KeyCode::Char('y') => {
                                 close_dialog = true;
                             }
                             _ => {}
@@ -994,11 +987,6 @@ impl App {
                         Some(Wrap { trim: false }),
                     );
                 }
-                Dialog::Info(message) => {
-                    let content = Text::from(Line::from(vec![Span::raw(message)]));
-
-                    render_dialog(f, "Copied", Color::Green, 3, content, None);
-                }
             }
         }
     }
@@ -1237,7 +1225,6 @@ impl App {
         let encoded = base64_encode(id.as_bytes());
         let _ = write!(io::stdout(), "\x1b]52;c;{encoded}\x07");
         let _ = io::stdout().flush();
-        self.dialog = Some(Dialog::Info(format!("Job id {id} copied to clipboard")));
     }
 
     fn focus_next_panel(&mut self) {
