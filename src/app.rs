@@ -475,10 +475,16 @@ impl App {
                             Focus::Jobs => self.select_next_job(),
                         },
                         KeyCode::Char('g') => match self.focus {
-                            Focus::Jobs => self.open_shell_in_workdir(),
+                            Focus::Jobs => self.select_first_job(),
                         },
                         KeyCode::Char('G') => match self.focus {
                             Focus::Jobs => self.select_last_job(),
+                        },
+                        KeyCode::Enter => match self.focus {
+                            Focus::Jobs => self.open_shell_in_workdir(),
+                        },
+                        KeyCode::Char('n') => match self.focus {
+                            Focus::Jobs => self.nvitop_on_job_node(),
                         },
                         KeyCode::Char('u') => match self.focus {
                             Focus::Jobs => {
@@ -630,7 +636,9 @@ impl App {
         let help_options = vec![
             ("q", "quit"),
             ("⏶/⏷", "navigate"),
-            ("g", "goto workdir"),
+            ("g/G", "first/last"),
+            ("enter", "goto workdir"),
+            ("n", "nvitop on node"),
             ("pgup/pgdown", "scroll"),
             ("home/end", "top/bottom"),
             ("esc", "cancel"),
@@ -1121,6 +1129,31 @@ impl App {
         self.selected_job().map(Job::id)
     }
 
+    /// Leave the TUI, run `command` on the tty, then quit turm (the user
+    /// returns to their original shell once the command exits).
+    fn leave_and_run(&mut self, command_label: String, mut command: Command) {
+        // Stop reading terminal input so the external program owns the tty.
+        self.input_paused.store(true, Ordering::SeqCst);
+
+        if let Err(error) = leave_terminal() {
+            self.input_paused.store(false, Ordering::SeqCst);
+            self.dialog = Some(Dialog::CommandError {
+                command: command_label,
+                output: error.to_string(),
+            });
+            return;
+        }
+
+        // Run in turm's process group (no setsid: that would strip the
+        // control terminal and break job control). Once the program exits,
+        // turm quits instead of restoring the TUI.
+        if let Err(error) = command.status() {
+            // The TUI is already gone, so report to stderr instead of a dialog.
+            let _ = writeln!(io::stderr(), "turm: failed to run {command_label}: {error}");
+        }
+        self.quit_after_shell = true;
+    }
+
     /// Quit turm and start an interactive shell in the selected job's
     /// working directory. The user stays in the shell after turm exits.
     fn open_shell_in_workdir(&mut self) {
@@ -1143,33 +1176,36 @@ impl App {
             return;
         }
 
-        // Stop reading terminal input so the shell owns the tty.
-        self.input_paused.store(true, Ordering::SeqCst);
+        let shell = shell_in(&dir);
+        let label = format!(
+            "{} in {}",
+            shell.get_program().to_string_lossy(),
+            dir.display()
+        );
+        self.leave_and_run(label, shell);
+    }
 
-        if let Err(error) = leave_terminal() {
-            self.input_paused.store(false, Ordering::SeqCst);
+    /// Quit turm, ssh to the selected job's first node and run nvitop.
+    fn nvitop_on_job_node(&mut self) {
+        let Some(job) = self.selected_job() else {
+            return;
+        };
+        let Some(node) = job
+            .nodelist
+            .split(',')
+            .next()
+            .filter(|node| !node.is_empty() && *node != "(None)")
+        else {
             self.dialog = Some(Dialog::CommandError {
-                command: "cd".to_string(),
-                output: error.to_string(),
+                command: "nvitop".to_string(),
+                output: "This job has no assigned node (nodelist is empty).".to_string(),
             });
             return;
-        }
+        };
 
-        // Run the shell in turm's process group (no setsid: that would strip
-        // the control terminal and break job control). Once the shell exits,
-        // turm quits instead of restoring the TUI — the user stays wherever
-        // the shell left them, back in their original shell afterwards.
-        let mut shell = shell_in(&dir);
-        if let Err(error) = shell.status() {
-            // The TUI is already gone, so report to stderr instead of a dialog.
-            let _ = writeln!(
-                io::stderr(),
-                "turm: failed to start {} in {}: {error}",
-                shell.get_program().to_string_lossy(),
-                dir.display()
-            );
-        }
-        self.quit_after_shell = true;
+        let mut command = Command::new("ssh");
+        command.arg(node).arg("nvitop");
+        self.leave_and_run(format!("ssh {node} nvitop"), command);
     }
 
     fn focus_next_panel(&mut self) {
@@ -1190,6 +1226,10 @@ impl App {
 
     fn select_previous_job(&mut self) {
         self.job_list_state.select_previous();
+    }
+
+    fn select_first_job(&mut self) {
+        self.job_list_state.select_first();
     }
 
     fn select_last_job(&mut self) {
