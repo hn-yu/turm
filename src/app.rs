@@ -22,11 +22,11 @@ use crate::job_watcher::JobWatcherHandle;
 use crossterm::{
     cursor::Show,
     event::{
-        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyCode, KeyEvent, MouseButton, MouseEventKind,
+        DisableBracketedPaste, DisableMouseCapture, Event, KeyCode, KeyEvent, MouseButton,
+        MouseEventKind,
     },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{LeaveAlternateScreen, disable_raw_mode},
 };
 use ratatui::{
     Frame, Terminal,
@@ -94,7 +94,7 @@ pub struct App {
     /// True while the user is dragging the Jobs/Details divider.
     resizing_panels: bool,
     pending_input_event: Option<Event>,
-    needs_full_redraw: bool,
+    quit_after_shell: bool,
 }
 
 pub struct Job {
@@ -199,7 +199,7 @@ impl App {
             jobs_panel_pct: None,
             resizing_panels: false,
             pending_input_event: None,
-            needs_full_redraw: false,
+            quit_after_shell: false,
         }
     }
 }
@@ -225,18 +225,11 @@ impl App {
                     }
                 }
             };
-            if should_quit {
+            if should_quit || self.quit_after_shell {
                 return Ok(());
             }
 
             if should_draw {
-                // After an external program took over the terminal (e.g. a shell
-                // opened with `g`), the alternate screen is blank but ratatui's
-                // diff still assumes the previous buffer. Force a full repaint.
-                if self.needs_full_redraw {
-                    terminal.clear()?;
-                    self.needs_full_redraw = false;
-                }
                 terminal.draw(|f| self.ui(f))?;
             }
         }
@@ -637,7 +630,7 @@ impl App {
         let help_options = vec![
             ("q", "quit"),
             ("⏶/⏷", "navigate"),
-            ("g", "shell in workdir"),
+            ("g", "goto workdir"),
             ("pgup/pgdown", "scroll"),
             ("home/end", "top/bottom"),
             ("esc", "cancel"),
@@ -1128,8 +1121,8 @@ impl App {
         self.selected_job().map(Job::id)
     }
 
-    /// Open an interactive shell in the selected job's working directory.
-    /// The TUI is suspended while the shell runs and restored afterwards.
+    /// Quit turm and start an interactive shell in the selected job's
+    /// working directory. The user stays in the shell after turm exits.
     fn open_shell_in_workdir(&mut self) {
         let Some(job) = self.selected_job() else {
             return;
@@ -1153,25 +1146,30 @@ impl App {
         // Stop reading terminal input so the shell owns the tty.
         self.input_paused.store(true, Ordering::SeqCst);
 
-        let mut shell = shell_in(&dir);
-        let spawn_result: io::Result<()> =
-            suspend_terminal().and_then(|()| shell.status()).map(|_| ());
-        let resume_result = resume_terminal();
-        // Always hand the tty back to turm's input thread.
-        self.input_paused.store(false, Ordering::SeqCst);
-        // The alternate screen is blank again; ratatui must repaint everything.
-        self.needs_full_redraw = true;
-
-        if let Err(error) = resume_result.or(spawn_result) {
+        if let Err(error) = leave_terminal() {
+            self.input_paused.store(false, Ordering::SeqCst);
             self.dialog = Some(Dialog::CommandError {
-                command: format!(
-                    "{} in {}",
-                    shell.get_program().to_string_lossy(),
-                    dir.display()
-                ),
+                command: "cd".to_string(),
                 output: error.to_string(),
             });
+            return;
         }
+
+        // Run the shell in turm's process group (no setsid: that would strip
+        // the control terminal and break job control). Once the shell exits,
+        // turm quits instead of restoring the TUI — the user stays wherever
+        // the shell left them, back in their original shell afterwards.
+        let mut shell = shell_in(&dir);
+        if let Err(error) = shell.status() {
+            // The TUI is already gone, so report to stderr instead of a dialog.
+            let _ = writeln!(
+                io::stderr(),
+                "turm: failed to start {} in {}: {error}",
+                shell.get_program().to_string_lossy(),
+                dir.display()
+            );
+        }
+        self.quit_after_shell = true;
     }
 
     fn focus_next_panel(&mut self) {
@@ -1324,8 +1322,8 @@ fn shell_in(dir: &Path) -> Command {
     command
 }
 
-/// Suspend the TUI terminal state so an external program can take over the tty.
-fn suspend_terminal() -> io::Result<()> {
+/// Leave the TUI terminal state so an external program can take over the tty.
+fn leave_terminal() -> io::Result<()> {
     disable_raw_mode()?;
     execute!(
         io::stdout(),
@@ -1335,18 +1333,6 @@ fn suspend_terminal() -> io::Result<()> {
         DisableMouseCapture,
     )?;
     io::stdout().flush()
-}
-
-/// Restore the TUI terminal state after an external program has exited.
-fn resume_terminal() -> io::Result<()> {
-    execute!(
-        io::stdout(),
-        EnableMouseCapture,
-        EnableBracketedPaste,
-        EnterAlternateScreen,
-    )?;
-    io::stdout().flush()?;
-    enable_raw_mode()
 }
 
 fn execute_command(mut command: Command, command_label: String) -> Result<(), CommandFailure> {
