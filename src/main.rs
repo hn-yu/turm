@@ -24,6 +24,11 @@ use ratatui::{
 };
 use squeue_args::SqueueArgs;
 use std::io::Write;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::Duration;
 use std::{io, panic, thread};
 
 #[derive(Parser)]
@@ -122,18 +127,35 @@ impl<W: Write> Drop for TerminalGuard<W> {
     }
 }
 
-fn input_loop(tx: Sender<std::io::Result<Event>>) {
-    while tx.send(event::read()).is_ok() {}
+fn input_loop(tx: Sender<std::io::Result<Event>>, paused: Arc<AtomicBool>) {
+    loop {
+        // While paused (e.g. an external shell owns the tty), never poll/read:
+        // crossterm's poll consumes tty bytes, which would steal shell input.
+        while paused.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(20));
+        }
+        if !event::poll(Duration::from_millis(20)).unwrap_or(false) {
+            continue;
+        }
+        if paused.load(Ordering::SeqCst) {
+            continue;
+        }
+        if tx.send(event::read()).is_err() {
+            return;
+        }
+    }
 }
 
 fn run_app<B: Backend<Error = io::Error>>(terminal: &mut Terminal<B>, args: Cli) -> io::Result<()> {
     let (input_tx, input_rx) = unbounded();
+    let input_paused = Arc::new(AtomicBool::new(false));
     let mut app = App::new(
         input_rx,
+        input_paused.clone(),
         args.slurm_refresh,
         args.file_refresh,
         args.squeue_args.to_vec(),
     );
-    thread::spawn(move || input_loop(input_tx));
+    thread::spawn(move || input_loop(input_tx, input_paused));
     app.run(terminal)
 }

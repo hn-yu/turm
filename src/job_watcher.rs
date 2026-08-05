@@ -125,6 +125,10 @@ impl JobWatcher {
                 name,
                 working_dir,
             ), // TODO fill all fields
+            workdir: match working_dir {
+                "" | "N/A" => None,
+                _ => Some(PathBuf::from(working_dir)),
+            },
         })
     }
 
@@ -273,6 +277,11 @@ mod tests {
             job.array_step, None,
             "array_task_id 'N/A' should yield None"
         );
+        assert_eq!(
+            job.workdir,
+            Some(PathBuf::from("/home/alice")),
+            "workdir should be parsed from the WorkDir field"
+        );
     }
 
     #[test]
@@ -321,6 +330,34 @@ mod tests {
     #[test]
     fn parse_line_empty_line_returns_none() {
         assert!(JobWatcher::parse_line("").is_none());
+    }
+
+    #[test]
+    fn parse_line_na_workdir_yields_none() {
+        let line = make_line(&[
+            "99",
+            "job",
+            "PENDING",
+            "bob",
+            "0:00",
+            "1:00:00",
+            "N/A",
+            "cpu=1",
+            "batch",
+            "node01",
+            "/out.log",
+            "/err.log",
+            "/bin/true",
+            "PD",
+            "None",
+            "99",
+            "N/A",
+            "node01",
+            "N/A",
+        ]);
+
+        let job = JobWatcher::parse_line(&line).expect("should parse");
+        assert_eq!(job.workdir, None, "WorkDir 'N/A' should map to None");
     }
 
     #[test]

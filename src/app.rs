@@ -3,12 +3,31 @@ use crossbeam::{
     select,
 };
 use itertools::Either;
-use std::{cmp::min, iter::once, path::PathBuf, process::Command, time::Duration};
+use std::{
+    cmp::min,
+    io::Write,
+    iter::once,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use crate::file_watcher::{FileWatcherError, FileWatcherHandle};
 use crate::job_watcher::JobWatcherHandle;
 
-use crossterm::event::{Event, KeyCode, KeyEvent, MouseButton, MouseEventKind};
+use crossterm::{
+    cursor::Show,
+    event::{
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyCode, KeyEvent, MouseButton, MouseEventKind,
+    },
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+};
 use ratatui::{
     Frame, Terminal,
     backend::Backend,
@@ -63,11 +82,13 @@ pub struct App {
     // sender: Sender<AppMessage>,
     receiver: Receiver<AppMessage>,
     input_receiver: Receiver<std::io::Result<Event>>,
+    input_paused: Arc<AtomicBool>,
     output_file_view: OutputFileView,
     job_list_height: u16,
     job_list_area: Rect,
     job_output_area: Rect,
     pending_input_event: Option<Event>,
+    needs_full_redraw: bool,
 }
 
 pub struct Job {
@@ -88,6 +109,7 @@ pub struct Job {
     pub stdout: Option<PathBuf>,
     pub stderr: Option<PathBuf>,
     pub command: String,
+    pub workdir: Option<PathBuf>,
 }
 
 impl Job {
@@ -129,6 +151,7 @@ const DIALOG_WIDTH: u16 = 80;
 impl App {
     pub fn new(
         input_receiver: Receiver<std::io::Result<Event>>,
+        input_paused: Arc<AtomicBool>,
         slurm_refresh_rate: u64,
         file_refresh_rate: u64,
         squeue_args: Vec<String>,
@@ -155,11 +178,13 @@ impl App {
             // sender,
             receiver,
             input_receiver,
+            input_paused,
             output_file_view: OutputFileView::default(),
             job_list_height: 0,
             job_list_area: Rect::default(),
             job_output_area: Rect::default(),
             pending_input_event: None,
+            needs_full_redraw: false,
         }
     }
 }
@@ -190,6 +215,13 @@ impl App {
             }
 
             if should_draw {
+                // After an external program took over the terminal (e.g. a shell
+                // opened with `g`), the alternate screen is blank but ratatui's
+                // diff still assumes the previous buffer. Force a full repaint.
+                if self.needs_full_redraw {
+                    terminal.clear()?;
+                    self.needs_full_redraw = false;
+                }
                 terminal.draw(|f| self.ui(f))?;
             }
         }
@@ -395,7 +427,7 @@ impl App {
                             Focus::Jobs => self.select_next_job(),
                         },
                         KeyCode::Char('g') => match self.focus {
-                            Focus::Jobs => self.select_first_job(),
+                            Focus::Jobs => self.open_shell_in_workdir(),
                         },
                         KeyCode::Char('G') => match self.focus {
                             Focus::Jobs => self.select_last_job(),
@@ -536,13 +568,14 @@ impl App {
 
         let job_detail_log = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(8), Constraint::Min(3)].as_ref())
+            .constraints([Constraint::Length(9), Constraint::Min(3)].as_ref())
             .split(master_detail[1]);
 
         // Help
         let help_options = vec![
             ("q", "quit"),
             ("⏶/⏷", "navigate"),
+            ("g", "shell in workdir"),
             ("pgup/pgdown", "scroll"),
             ("home/end", "top/bottom"),
             ("esc", "cancel"),
@@ -680,6 +713,16 @@ impl App {
                 Span::raw(" "),
                 Span::raw(&j.command),
             ]);
+            let workdir = Line::from(vec![
+                Span::styled("Workdir ", Style::default().fg(Color::Yellow)),
+                Span::raw(" "),
+                Span::raw(
+                    j.workdir
+                        .as_ref()
+                        .and_then(|p| p.to_str())
+                        .unwrap_or_default(),
+                ),
+            ]);
             let nodes = Line::from(vec![
                 Span::styled("Nodes  ", Style::default().fg(Color::Yellow)),
                 Span::raw(" "),
@@ -708,7 +751,7 @@ impl App {
                 ),
             ]);
 
-            Text::from(vec![state, name, command, nodes, tres, stdout])
+            Text::from(vec![state, name, command, workdir, nodes, tres, stdout])
         });
         let job_detail = Paragraph::new(job_detail.unwrap_or_default()).block(
             Block::default()
@@ -1022,6 +1065,52 @@ impl App {
         self.selected_job().map(Job::id)
     }
 
+    /// Open an interactive shell in the selected job's working directory.
+    /// The TUI is suspended while the shell runs and restored afterwards.
+    fn open_shell_in_workdir(&mut self) {
+        let Some(job) = self.selected_job() else {
+            return;
+        };
+        let Some(dir) = job.workdir.clone() else {
+            self.dialog = Some(Dialog::CommandError {
+                command: "cd".to_string(),
+                output: "This job has no known working directory (squeue WorkDir is N/A)."
+                    .to_string(),
+            });
+            return;
+        };
+        if !dir.is_dir() {
+            self.dialog = Some(Dialog::CommandError {
+                command: format!("cd {}", dir.display()),
+                output: format!("Working directory does not exist: {}", dir.display()),
+            });
+            return;
+        }
+
+        // Stop reading terminal input so the shell owns the tty.
+        self.input_paused.store(true, Ordering::SeqCst);
+
+        let mut shell = shell_in(&dir);
+        let spawn_result: io::Result<()> =
+            suspend_terminal().and_then(|()| shell.status()).map(|_| ());
+        let resume_result = resume_terminal();
+        // Always hand the tty back to turm's input thread.
+        self.input_paused.store(false, Ordering::SeqCst);
+        // The alternate screen is blank again; ratatui must repaint everything.
+        self.needs_full_redraw = true;
+
+        if let Err(error) = resume_result.or(spawn_result) {
+            self.dialog = Some(Dialog::CommandError {
+                command: format!(
+                    "{} in {}",
+                    shell.get_program().to_string_lossy(),
+                    dir.display()
+                ),
+                output: error.to_string(),
+            });
+        }
+    }
+
     fn focus_next_panel(&mut self) {
         match self.focus {
             Focus::Jobs => self.focus = Focus::Jobs,
@@ -1040,10 +1129,6 @@ impl App {
 
     fn select_previous_job(&mut self) {
         self.job_list_state.select_previous();
-    }
-
-    fn select_first_job(&mut self) {
-        self.job_list_state.select_first();
     }
 
     fn select_last_job(&mut self) {
@@ -1156,6 +1241,40 @@ fn execute_scontrol_update_timelimit(job_id: &str, time_limit: &str) -> Result<(
     )
 }
 
+/// Build the interactive shell command that will run in `dir`.
+/// Uses `$SHELL` when set, falling back to `sh`.
+fn shell_in(dir: &Path) -> Command {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
+    let mut command = Command::new(shell);
+    command.current_dir(dir);
+    command
+}
+
+/// Suspend the TUI terminal state so an external program can take over the tty.
+fn suspend_terminal() -> io::Result<()> {
+    disable_raw_mode()?;
+    execute!(
+        io::stdout(),
+        Show,
+        LeaveAlternateScreen,
+        DisableBracketedPaste,
+        DisableMouseCapture,
+    )?;
+    io::stdout().flush()
+}
+
+/// Restore the TUI terminal state after an external program has exited.
+fn resume_terminal() -> io::Result<()> {
+    execute!(
+        io::stdout(),
+        EnableMouseCapture,
+        EnableBracketedPaste,
+        EnterAlternateScreen,
+    )?;
+    io::stdout().flush()?;
+    enable_raw_mode()
+}
+
 fn execute_command(mut command: Command, command_label: String) -> Result<(), CommandFailure> {
     let output = command.output().map_err(|error| CommandFailure {
         command: command_label.clone(),
@@ -1253,5 +1372,28 @@ mod tests {
             validated_time_limit(&Input::new(" 01:00:00 ".to_string())),
             Some("01:00:00".to_string())
         );
+    }
+
+    #[test]
+    fn test_shell_in_uses_workdir_as_current_dir() {
+        // Pin SHELL so the test is deterministic regardless of the environment.
+        unsafe { std::env::set_var("SHELL", "/bin/sh") };
+
+        let dir = std::env::temp_dir().join(format!("turm-test-shell-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut command = shell_in(&dir);
+        command.args(["-c", "pwd"]);
+        let output = command.output().unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().trim(),
+            dir.to_str().unwrap(),
+            "the shell must start in the job's working directory"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        unsafe { std::env::remove_var("SHELL") };
     }
 }
