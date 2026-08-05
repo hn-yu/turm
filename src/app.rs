@@ -87,6 +87,12 @@ pub struct App {
     job_list_height: u16,
     job_list_area: Rect,
     job_output_area: Rect,
+    /// Parent area of the Jobs | Details horizontal split (excludes the help line).
+    content_area: Rect,
+    /// Custom Jobs panel width (% of `content_area`). `None` keeps upstream's Min(50)/70%.
+    jobs_panel_pct: Option<u16>,
+    /// True while the user is dragging the Jobs/Details divider.
+    resizing_panels: bool,
     pending_input_event: Option<Event>,
     needs_full_redraw: bool,
 }
@@ -147,6 +153,12 @@ pub(crate) enum MouseScrollTarget {
 
 const SCANCEL_SIGNALS: &[&str] = &["TERM", "INT", "HUP", "USR1", "USR2", "STOP", "CONT", "KILL"];
 const DIALOG_WIDTH: u16 = 80;
+/// Fallback when mapping a drag before the content area is known.
+const JOBS_PANEL_PCT_DEFAULT: u16 = 30;
+const JOBS_PANEL_PCT_MIN: u16 = 15;
+const JOBS_PANEL_PCT_MAX: u16 = 70;
+/// Columns on either side of the Jobs/Details border that start a resize drag.
+const PANEL_DIVIDER_HIT_SLOP: u16 = 1;
 
 impl App {
     pub fn new(
@@ -183,6 +195,9 @@ impl App {
             job_list_height: 0,
             job_list_area: Rect::default(),
             job_output_area: Rect::default(),
+            content_area: Rect::default(),
+            jobs_panel_pct: None,
+            resizing_panels: false,
             pending_input_event: None,
             needs_full_redraw: false,
         }
@@ -256,6 +271,11 @@ impl App {
                     if self.dialog.is_some() {
                         return (false, false);
                     }
+                    if self.is_on_panel_divider(mouse.column, mouse.row) {
+                        self.resizing_panels = true;
+                        self.resize_panels_to(mouse.column);
+                        return (false, true);
+                    }
                     if let Some(index) = self.job_index_at(mouse.column, mouse.row) {
                         if self.job_list_state.selected() != Some(index) {
                             self.handle(AppMessage::MouseClick(index));
@@ -264,8 +284,22 @@ impl App {
                     }
                     (false, false)
                 }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if self.dialog.is_some() || !self.resizing_panels {
+                        return (false, false);
+                    }
+                    self.resize_panels_to(mouse.column);
+                    (false, true)
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    if self.resizing_panels {
+                        self.resizing_panels = false;
+                        return (false, false);
+                    }
+                    (false, false)
+                }
                 MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                    if self.dialog.is_some() {
+                    if self.dialog.is_some() || self.resizing_panels {
                         return (false, false);
                     }
                     let Some(target) = self.mouse_scroll_target(mouse.column, mouse.row) else {
@@ -310,6 +344,27 @@ impl App {
         } else {
             None
         }
+    }
+
+    fn is_on_panel_divider(&self, column: u16, row: u16) -> bool {
+        if self.job_list_area.width == 0 || self.job_list_area.height == 0 {
+            return false;
+        }
+        let divider_x = self
+            .job_list_area
+            .x
+            .saturating_add(self.job_list_area.width.saturating_sub(1));
+        let in_row = row >= self.job_list_area.y
+            && row
+                < self
+                    .job_list_area
+                    .y
+                    .saturating_add(self.job_list_area.height);
+        in_row && column.abs_diff(divider_x) <= PANEL_DIVIDER_HIT_SLOP
+    }
+
+    fn resize_panels_to(&mut self, column: u16) {
+        self.jobs_panel_pct = Some(jobs_panel_pct_from_column(column, self.content_area));
     }
 
     fn handle(&mut self, msg: AppMessage) {
@@ -563,8 +618,15 @@ impl App {
 
         let master_detail = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(50), Constraint::Percentage(70)].as_ref())
+            .constraints(match self.jobs_panel_pct {
+                None => [Constraint::Min(50), Constraint::Percentage(70)],
+                Some(jobs_pct) => [
+                    Constraint::Percentage(jobs_pct),
+                    Constraint::Percentage(100 - jobs_pct),
+                ],
+            })
             .split(content_help[0]);
+        self.content_area = content_help[0];
 
         let job_detail_log = Layout::default()
             .direction(Direction::Vertical)
@@ -584,6 +646,7 @@ impl App {
             ("t", "set time limit"),
             ("o", "toggle stdout/stderr"),
             ("w", "toggle text wrap"),
+            ("drag │", "resize"),
         ];
         let blue_style = Style::default().fg(Color::Blue);
         let light_blue_style = Style::default().fg(Color::LightBlue);
@@ -1192,6 +1255,17 @@ fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
         && row < rect.y.saturating_add(rect.height)
 }
 
+fn jobs_panel_pct_from_column(column: u16, content_area: Rect) -> u16 {
+    if content_area.width == 0 {
+        return JOBS_PANEL_PCT_DEFAULT;
+    }
+    let relative = column
+        .saturating_sub(content_area.x)
+        .min(content_area.width);
+    let pct = (u32::from(relative) * 100 / u32::from(content_area.width)) as u16;
+    pct.clamp(JOBS_PANEL_PCT_MIN, JOBS_PANEL_PCT_MAX)
+}
+
 fn mouse_wheel_direction(kind: MouseEventKind) -> Option<MouseWheelDirection> {
     match kind {
         MouseEventKind::ScrollUp => Some(MouseWheelDirection::Up),
@@ -1362,6 +1436,25 @@ mod tests {
         let input = "123456789";
         let expected = vec!["123456789"];
         assert_eq!(chunked_string(input, 0, 0), expected);
+    }
+
+    #[test]
+    fn test_jobs_panel_pct_from_column() {
+        let area = Rect::new(0, 0, 100, 40);
+        assert_eq!(jobs_panel_pct_from_column(30, area), 30);
+        assert_eq!(jobs_panel_pct_from_column(0, area), JOBS_PANEL_PCT_MIN);
+        assert_eq!(jobs_panel_pct_from_column(100, area), JOBS_PANEL_PCT_MAX);
+        assert_eq!(jobs_panel_pct_from_column(50, area), 50);
+
+        // Offset content area (not starting at column 0).
+        let area = Rect::new(10, 0, 100, 40);
+        assert_eq!(jobs_panel_pct_from_column(40, area), 30);
+
+        // Empty area falls back to the default.
+        assert_eq!(
+            jobs_panel_pct_from_column(50, Rect::default()),
+            JOBS_PANEL_PCT_DEFAULT
+        );
     }
 
     #[test]
