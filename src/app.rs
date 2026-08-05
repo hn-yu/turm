@@ -1204,7 +1204,9 @@ impl App {
         };
 
         let mut command = Command::new("ssh");
-        command.arg(node).arg("nvitop");
+        // -t: allocate a remote pty, otherwise nvitop cannot run its TUI and
+        // falls back to --once (prints a snapshot and exits immediately).
+        command.arg("-t").arg(node).arg("nvitop");
         self.leave_and_run(format!("ssh {node} nvitop"), command);
     }
 
