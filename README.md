@@ -62,6 +62,30 @@ In your `config.fish` or in a separate `completions/turm.fish` file, add the fol
 turm completion fish | source
 ```
 
+## Keybindings
+
+All bindings are also shown in the help bar at the bottom of the TUI.
+
+| Key | Action |
+|---|---|
+| `q` | Quit |
+| `j`/`k` or `⏷`/`⏶` | Select next / previous job |
+| `g` / `G` | Jump to first / last job |
+| `Enter` | **Goto workdir** — quit `turm` and open a shell in the selected job's working directory |
+| `n` | **nvitop on node** — quit `turm`, `ssh` to the selected job's first node and run `nvitop` (GPU monitoring) |
+| `y` | **Copy job id** — copy the selected job's id to the terminal clipboard (OSC 52, works over SSH) |
+| `c` / `C` | Cancel job / pick a signal to send |
+| `t` | Set time limit |
+| `o` | Toggle stdout / stderr log view |
+| `w` | Toggle log text wrap |
+| `pgup` / `pgdown` | Scroll log (hold `shift`/`ctrl`/`alt` for 50 lines) |
+| `home` / `end` | Jump to top / bottom of log |
+| `ctrl+d` / `ctrl+u` | Scroll job list half a page |
+| `esc` / `enter` | Close dialogs / confirm |
+| drag `│` | Resize the Jobs/Details split (mouse) |
+
+`nvitop` must be on the remote node's `PATH`. On clusters with a shared home directory, install it once (e.g. `pip install --user nvitop`) and it works on every node.
+
 ## How it works
 
 `turm` obtains information about jobs by parsing the output of `squeue`.
