@@ -48,6 +48,7 @@ pub enum Dialog {
     SelectCancelSignal { id: String, selected_signal: usize },
     EditTimeLimit { id: String, input: Input },
     CommandError { command: String, output: String },
+    Info(String),
 }
 
 struct CommandFailure {
@@ -451,6 +452,12 @@ impl App {
                             }
                             _ => {}
                         },
+                        Dialog::Info(_) => match key.code {
+                            KeyCode::Enter | KeyCode::Esc | KeyCode::Char('y') => {
+                                close_dialog = true;
+                            }
+                            _ => {}
+                        },
                     };
 
                     if let Some((id, signal)) = scancel_request {
@@ -485,6 +492,9 @@ impl App {
                         },
                         KeyCode::Char('n') => match self.focus {
                             Focus::Jobs => self.nvitop_on_job_node(),
+                        },
+                        KeyCode::Char('y') => match self.focus {
+                            Focus::Jobs => self.copy_job_id(),
                         },
                         KeyCode::Char('u') => match self.focus {
                             Focus::Jobs => {
@@ -639,6 +649,7 @@ impl App {
             ("g/G", "first/last"),
             ("enter", "goto workdir"),
             ("n", "nvitop on node"),
+            ("y", "copy job id"),
             ("pgup/pgdown", "scroll"),
             ("home/end", "top/bottom"),
             ("esc", "cancel"),
@@ -983,6 +994,11 @@ impl App {
                         Some(Wrap { trim: false }),
                     );
                 }
+                Dialog::Info(message) => {
+                    let content = Text::from(Line::from(vec![Span::raw(message)]));
+
+                    render_dialog(f, "Copied", Color::Green, 3, content, None);
+                }
             }
         }
     }
@@ -1210,6 +1226,20 @@ impl App {
         self.leave_and_run(format!("ssh {node} nvitop"), command);
     }
 
+    /// Copy the selected job's id to the terminal clipboard via OSC 52.
+    fn copy_job_id(&mut self) {
+        let Some(job) = self.selected_job() else {
+            return;
+        };
+        let id = job.id();
+        // ESC ] 52 ; c ; <base64> BEL — sets the clipboard of the terminal
+        // emulator, which also works over SSH (no X server needed).
+        let encoded = base64_encode(id.as_bytes());
+        let _ = write!(io::stdout(), "\x1b]52;c;{encoded}\x07");
+        let _ = io::stdout().flush();
+        self.dialog = Some(Dialog::Info(format!("Job id {id} copied to clipboard")));
+    }
+
     fn focus_next_panel(&mut self) {
         match self.focus {
             Focus::Jobs => self.focus = Focus::Jobs,
@@ -1317,6 +1347,34 @@ fn mouse_wheel_direction(kind: MouseEventKind) -> Option<MouseWheelDirection> {
 fn signal_index_for_digit(digit: char) -> Option<usize> {
     let value = digit.to_digit(10)? as usize;
     if value == 0 { None } else { Some(value - 1) }
+}
+
+/// Minimal base64 encoder (RFC 4648, with padding) for OSC 52 clipboard
+/// payloads. Input is expected to be short ASCII (job ids).
+fn base64_encode(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 fn validated_time_limit(input: &Input) -> Option<String> {
@@ -1483,6 +1541,18 @@ mod tests {
             jobs_panel_pct_from_column(50, Rect::default()),
             JOBS_PANEL_PCT_DEFAULT
         );
+    }
+
+    #[test]
+    fn test_base64_encode() {
+        // RFC 4648 test vectors
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+        // Job id is ASCII
+        assert_eq!(base64_encode(b"12345"), "MTIzNDU=");
     }
 
     #[test]
