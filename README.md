@@ -13,6 +13,45 @@ A TUI for [Slurm](https://slurm.schedmd.com/), which provides a convenient way t
 turm --me --sort=-id --states=ALL
 ```
 
+## Usage
+
+```
+turm [OPTIONS] [COMMAND]
+
+Commands:
+  completion  Print shell completion script to stdout
+  help        Print this message or the help of the given subcommand
+```
+
+`turm` accepts the same options as `squeue`:
+
+| Option | Description |
+|---|---|
+| `--slurm-refresh <SECONDS>` | Refresh rate for the job watcher [default: 2] |
+| `--file-refresh <SECONDS>` | Refresh rate for the file watcher [default: 2] |
+| `-A, --account <ACCOUNT>` | Comma separated list of accounts to view, default is all accounts |
+| `-a, --all` | Display jobs in hidden partitions |
+| `--federation` | Report federated information if a member of one |
+| `--hide` | Do not display jobs in hidden partitions |
+| `-j, --job <JOBID>` | Comma separated list of jobs IDs to view, default is all |
+| `--local` | Report information only about jobs on the local cluster. Overrides `--federation` |
+| `-L, --licenses <LICENSES>` | Comma separated list of license names to view |
+| `-M, --clusters <CLUSTERS>` | Cluster to issue commands to. Default is current cluster. Cluster with no name will reset to default. Implies `--local` |
+| `--me` | Equivalent to `--user=<my username>` |
+| `-n, --name <NAME>` | Comma separated list of job names to view |
+| `--noconvert` | Don't convert units from their original type (e.g. 2048M won't be converted to 2G) |
+| `-p, --partition <PARTITION>` | Comma separated list of partitions to view, default is all partitions |
+| `-q, --qos <QOS>` | Comma separated list of qos's to view, default is all qos's |
+| `-R, --reservation <RESERVATION>` | Reservation to view, default is all |
+| `--sibling` | Report information about all sibling jobs on a federated cluster. Implies `--federation` |
+| `-s, --step <STEP>` | Comma separated list of job steps to view, default is all |
+| `-S, --sort <FIELDS>` | Comma separated list of fields to sort on |
+| `-t, --states <STATES>` | Comma separated list of states to view, default is pending and running, `--states=all` reports all states |
+| `-u, --user <USER>` | Comma separated list of users to view |
+| `-w, --nodelist <NODES>` | List of nodes to view, default is all nodes |
+| `-h, --help` | Print help |
+| `-V, --version` | Print version |
+
 ## Installation
 
 `turm` is available on [PyPI](https://pypi.org/project/turm/), [crates.io](https://crates.io/crates/turm), and [conda-forge](https://github.com/conda-forge/turm-feedstock):
