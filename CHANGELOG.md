@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Features
+
+* add `g` binding to open a shell in the selected job's working directory ([#72](https://github.com/karimknaebel/turm/pull/72))
+
 ## [0.14.0](https://github.com/karimknaebel/turm/compare/v0.13.1...v0.14.0) (2026-03-07)
 
 
