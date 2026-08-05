@@ -355,10 +355,11 @@ impl App {
             .x
             .saturating_add(self.job_list_area.width.saturating_sub(1));
         let in_row = row >= self.job_list_area.y
-            && row < self
-                .job_list_area
-                .y
-                .saturating_add(self.job_list_area.height);
+            && row
+                < self
+                    .job_list_area
+                    .y
+                    .saturating_add(self.job_list_area.height);
         in_row && column.abs_diff(divider_x) <= PANEL_DIVIDER_HIT_SLOP
     }
 
