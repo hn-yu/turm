@@ -484,7 +484,7 @@ impl App {
                             Focus::Jobs => self.open_shell_in_workdir(),
                         },
                         KeyCode::Char('n') => match self.focus {
-                            Focus::Jobs => self.nvitop_on_job_node(),
+                            Focus::Jobs => self.monitor_job_node(),
                         },
                         KeyCode::Char('y') => match self.focus {
                             Focus::Jobs => self.copy_job_id(),
@@ -641,7 +641,7 @@ impl App {
             ("⏶/⏷", "navigate"),
             ("g/G", "first/last"),
             ("enter", "goto workdir"),
-            ("n", "nvitop on node"),
+            ("n", "monitor node"),
             ("y", "copy job id"),
             ("pgup/pgdown", "scroll"),
             ("home/end", "top/bottom"),
@@ -1189,8 +1189,9 @@ impl App {
         self.leave_and_run(label, shell);
     }
 
-    /// Quit turm, ssh to the selected job's first node and run nvitop.
-    fn nvitop_on_job_node(&mut self) {
+    /// Quit turm, ssh to the selected job's first node and run a monitor:
+    /// nvitop for GPU jobs, htop filtered by the job's user for CPU jobs.
+    fn monitor_job_node(&mut self) {
         let Some(job) = self.selected_job() else {
             return;
         };
@@ -1208,10 +1209,17 @@ impl App {
         };
 
         let mut command = Command::new("ssh");
-        // -t: allocate a remote pty, otherwise nvitop cannot run its TUI and
-        // falls back to --once (prints a snapshot and exits immediately).
-        command.arg("-t").arg(node).arg("nvitop");
-        self.leave_and_run(format!("ssh {node} nvitop"), command);
+        // -t: allocate a remote pty, otherwise the TUI tools cannot run in
+        // monitor mode (nvitop falls back to --once and exits immediately).
+        command.arg("-t").arg(node);
+        let label = if job.tres.contains("gpu") {
+            command.arg("nvitop");
+            format!("ssh {node} nvitop")
+        } else {
+            command.arg("htop").arg("-u").arg(&job.user);
+            format!("ssh {node} htop -u {}", job.user)
+        };
+        self.leave_and_run(label, command);
     }
 
     /// Copy the selected job's id to the terminal clipboard via OSC 52.
