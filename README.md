@@ -1,10 +1,8 @@
 # turm
 
-[![image](https://img.shields.io/pypi/v/turm.svg)](https://pypi.python.org/pypi/turm)
-[![image](https://img.shields.io/crates/v/turm.svg)](https://crates.io/crates/turm)
-[![Conda Version](https://img.shields.io/conda/vn/conda-forge/turm.svg)](https://anaconda.org/conda-forge/turm)
-
 A TUI for [Slurm](https://slurm.schedmd.com/), which provides a convenient way to manage your cluster jobs.
+
+> **Fork notice**: this is a personal fork of [karimknaebel/turm](https://github.com/karimknaebel/turm) with extra features for day-to-day cluster work — goto workdir (`Enter`), node monitoring with nvitop/htop (`n`), copy job id (`y`), resizable panels. This fork is **not** intended to be merged back into the upstream project; for the original version, see the upstream repository.
 
 <img alt="turm demo" src="https://github.com/user-attachments/assets/7daade50-def3-4bf8-bf12-df311438094e" width="100%" />
 
@@ -15,29 +13,17 @@ turm --me --sort=-id --states=ALL
 
 ## Installation
 
-`turm` is available on [PyPI](https://pypi.org/project/turm/), [crates.io](https://crates.io/crates/turm), and [conda-forge](https://github.com/conda-forge/turm-feedstock):
+This fork is **not** published to PyPI, crates.io, or conda-forge (and it is not available via `uv`, `pip`, `pixi` or `conda`). Install it directly from this repository:
 
 ```shell
-# With uv.
-uv tool install turm
-
-# With pip.
-pip install turm
-
-# With cargo.
-cargo install turm
-
-# With pixi.
-pixi global install turm
-
-# With conda.
-conda install --channel conda-forge turm
-
-# With wget. Make sure ~/.local/bin is in your $PATH.
-wget https://github.com/karimknaebel/turm/releases/latest/download/turm-x86_64-unknown-linux-musl.tar.gz -O - | tar -xz -C ~/.local/bin/
+cargo install --git https://github.com/hn-yu/turm
 ```
 
-The [release page](https://github.com/karimknaebel/turm/releases) also contains precompiled binaries for Linux.
+This builds the `main` branch (with all features listed below) and installs the binary to `~/.cargo/bin/turm`.
+
+> **Note**: if you previously installed the upstream `turm` (e.g. via `uv tool install turm`), make sure `~/.cargo/bin` comes before that installation in your `PATH`, or remove the other installation first — otherwise your shell may still resolve to the old upstream binary. If `turm` is already running, exit and restart it to pick up the new version.
+
+No prebuilt binaries are published; without a Rust toolchain, build it yourself with `cargo build --release` and copy `target/release/turm` into your `~/.local/bin`.
 
 ### Shell Completion (optional)
 
