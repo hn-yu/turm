@@ -4,7 +4,12 @@
 
 ### Features
 
-* add `g` binding to open a shell in the selected job's working directory ([#72](https://github.com/karimknaebel/turm/pull/72))
+* `Enter` opens a shell in the selected job's working directory (turm exits; the user stays in the workdir shell)
+* `g` / `G` jump to the first / last job
+* `n` monitors the selected job's node: `nvitop` for GPU jobs, `htop -u <user>` for CPU jobs
+* `y` copies the selected job's id to the terminal clipboard (OSC 52, works over SSH)
+* resizable Jobs/Details split by dragging the `│` divider (upstream PR [#76](https://github.com/karimknaebel/turm/pull/76))
+* show the job's `Workdir` in the details panel
 
 ## [0.14.0](https://github.com/karimknaebel/turm/compare/v0.13.1...v0.14.0) (2026-03-07)
 

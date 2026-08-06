@@ -72,7 +72,7 @@ All bindings are also shown in the help bar at the bottom of the TUI.
 | `j`/`k` or `⏷`/`⏶` | Select next / previous job |
 | `g` / `G` | Jump to first / last job |
 | `Enter` | **Goto workdir** — quit `turm` and open a shell in the selected job's working directory |
-| `n` | **nvitop on node** — quit `turm`, `ssh` to the selected job's first node and run `nvitop` (GPU monitoring) |
+| `n` | **Monitor node** — quit `turm`, `ssh` to the selected job's first node and run `nvitop` (GPU jobs) or `htop -u <user>` (CPU jobs) |
 | `y` | **Copy job id** — copy the selected job's id to the terminal clipboard (OSC 52, works over SSH) |
 | `c` / `C` | Cancel job / pick a signal to send |
 | `t` | Set time limit |
@@ -84,7 +84,7 @@ All bindings are also shown in the help bar at the bottom of the TUI.
 | `esc` / `enter` | Close dialogs / confirm |
 | drag `│` | Resize the Jobs/Details split (mouse) |
 
-`nvitop` must be on the remote node's `PATH`. On clusters with a shared home directory, install it once (e.g. `pip install --user nvitop`) and it works on every node.
+`nvitop` and `htop` must be on the remote node's `PATH`. On clusters with a shared home directory, install nvitop once (e.g. `pip install --user nvitop`) and it works on every node. Note that clusters often restrict SSH to nodes where you have an active job (e.g. `pam_slurm_adopt`).
 
 ## How it works
 
