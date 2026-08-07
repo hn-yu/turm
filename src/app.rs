@@ -1155,6 +1155,11 @@ impl App {
             // The TUI is already gone, so report to stderr instead of a dialog.
             let _ = writeln!(io::stderr(), "turm: failed to run {command_label}: {error}");
         }
+        // Force a full terminal restore. TUI tools like nvitop may be quit
+        // with Ctrl+C, which kills them without leaving the alternate screen;
+        // without this, stale frames stay on the terminal.
+        let _ = write!(io::stdout(), "\x1b[?1049l\x1b[?25h\x1b[2J\x1b[H");
+        let _ = io::stdout().flush();
         self.quit_after_shell = true;
     }
 
