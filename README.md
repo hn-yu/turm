@@ -58,7 +58,7 @@ All bindings are also shown in the help bar at the bottom of the TUI.
 | `j`/`k` or `⏷`/`⏶` | Select next / previous job |
 | `g` / `G` | Jump to first / last job |
 | `Enter` | **Goto workdir** — quit `turm` and open a shell in the selected job's working directory |
-| `n` | **Monitor node** — quit `turm`, `ssh` to the selected job's first node and run `nvitop` (GPU jobs) or `htop -u <user>` (CPU jobs) |
+| `n` | **Monitor node** — quit `turm`, `ssh` to the selected job's first node and run `nvitop` (GPU jobs) or `htop -u <user>`, falling back to `top -u <user>` (CPU jobs) |
 | `y` | **Copy job id** — copy the selected job's id to the terminal clipboard (OSC 52, works over SSH) |
 | `c` / `C` | Cancel job / pick a signal to send |
 | `t` | Set time limit |
