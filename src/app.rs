@@ -1216,8 +1216,14 @@ impl App {
             command.arg("nvitop");
             format!("ssh {node} nvitop")
         } else {
-            command.arg("htop").arg("-u").arg(&job.user);
-            format!("ssh {node} htop -u {}", job.user)
+            // htop when available on the node, otherwise plain top (procps
+            // is present everywhere). Both filter by the job's user.
+            let remote = format!(
+                "command -v htop >/dev/null 2>&1 && htop -u {} || top -u {}",
+                job.user, job.user
+            );
+            command.arg(remote);
+            format!("ssh {node} htop/top -u {}", job.user)
         };
         self.leave_and_run(label, command);
     }
