@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${TURM_PARENT_FILE:?TURM_PARENT_FILE must be set}"
+{
+    ps -o comm= -p "$PPID"
+    awk '/^(VmRSS|Threads):/ { print }' "/proc/$PPID/status"
+    printf 'FDs: %s\n' "$(find "/proc/$PPID/fd" -mindepth 1 -maxdepth 1 | wc -l)"
+} > "$TURM_PARENT_FILE"
+
+printf '__TURM_SSH_DONE__'

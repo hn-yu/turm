@@ -1448,32 +1448,62 @@ fn leave_terminal() -> io::Result<()> {
 
 impl ExitCommand {
     pub(crate) fn execute(mut self) -> io::Result<()> {
-        if self.replace_process {
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::CommandExt;
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
 
+            if self.replace_process {
                 let error = self.command.exec();
                 return Err(io::Error::new(
                     error.kind(),
                     format!("failed to run {}: {error}", self.label),
                 ));
             }
-        }
 
-        let result = self.command.status().map(|_| ());
+            // Replace turm with a tiny shell supervisor. It waits only to
+            // restore the terminal after ssh exits; the App, watcher threads,
+            // and turm's memory have already been released.
+            let program = self.command.get_program().to_os_string();
+            let args = self
+                .command
+                .get_args()
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            let mut supervisor = Command::new("sh");
+            supervisor
+                .arg("-c")
+                .arg(
+                    r#""$@"
+status=$?
+printf '\033[?1049l\033[?25h\033[2J\033[H'
+exit "$status""#,
+                )
+                .arg("turm-terminal-cleanup")
+                .arg(program)
+                .args(args);
 
-        // A remotely launched TUI may be killed before it restores the tty.
-        // Keep this post-command cleanup for the non-exec monitor path.
-        let _ = write!(io::stdout(), "\x1b[?1049l\x1b[?25h\x1b[2J\x1b[H");
-        let _ = io::stdout().flush();
-
-        result.map_err(|error| {
-            io::Error::new(
+            let error = supervisor.exec();
+            Err(io::Error::new(
                 error.kind(),
                 format!("failed to run {}: {error}", self.label),
-            )
-        })
+            ))
+        }
+
+        #[cfg(not(unix))]
+        {
+            let result = self.command.status().map(|_| ());
+
+            // A remotely launched TUI may be killed before it restores the tty.
+            let _ = write!(io::stdout(), "\x1b[?1049l\x1b[?25h\x1b[2J\x1b[H");
+            let _ = io::stdout().flush();
+
+            result.map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("failed to run {}: {error}", self.label),
+                )
+            })
+        }
     }
 }
 
