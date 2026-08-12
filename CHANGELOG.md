@@ -11,6 +11,10 @@
 * resizable Jobs/Details split by dragging the `│` divider (upstream PR [#76](https://github.com/karimknaebel/turm/pull/76))
 * show the job's `Workdir` in the details panel
 
+### Bug Fixes
+
+* prevent `Enter` and `n` from keeping the old turm process and watcher resources alive
+
 ## [0.14.0](https://github.com/karimknaebel/turm/compare/v0.13.1...v0.14.0) (2026-03-07)
 
 
