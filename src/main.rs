@@ -72,8 +72,15 @@ fn main() -> io::Result<()> {
 
     install_panic_hook();
 
-    let mut terminal_guard = TerminalGuard::new(io::stdout())?;
-    run_app(terminal_guard.terminal_mut(), args)
+    let exit_command = {
+        let mut terminal_guard = TerminalGuard::new(io::stdout())?;
+        run_app(terminal_guard.terminal_mut(), args)?
+    };
+
+    match exit_command {
+        Some(command) => command.execute(),
+        None => Ok(()),
+    }
 }
 
 fn install_panic_hook() {
@@ -146,7 +153,10 @@ fn input_loop(tx: Sender<std::io::Result<Event>>, paused: Arc<AtomicBool>) {
     }
 }
 
-fn run_app<B: Backend<Error = io::Error>>(terminal: &mut Terminal<B>, args: Cli) -> io::Result<()> {
+fn run_app<B: Backend<Error = io::Error>>(
+    terminal: &mut Terminal<B>,
+    args: Cli,
+) -> io::Result<Option<app::ExitCommand>> {
     let (input_tx, input_rx) = unbounded();
     let input_paused = Arc::new(AtomicBool::new(false));
     let mut app = App::new(
@@ -157,5 +167,6 @@ fn run_app<B: Backend<Error = io::Error>>(terminal: &mut Terminal<B>, args: Cli)
         args.squeue_args.to_vec(),
     );
     thread::spawn(move || input_loop(input_tx, input_paused));
-    app.run(terminal)
+    app.run(terminal)?;
+    Ok(app.take_exit_command())
 }

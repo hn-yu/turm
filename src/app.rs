@@ -55,6 +55,12 @@ struct CommandFailure {
     output: String,
 }
 
+pub(crate) struct ExitCommand {
+    label: String,
+    command: Command,
+    replace_process: bool,
+}
+
 #[derive(Clone, Copy)]
 pub enum ScrollAnchor {
     Top,
@@ -94,7 +100,7 @@ pub struct App {
     /// True while the user is dragging the Jobs/Details divider.
     resizing_panels: bool,
     pending_input_event: Option<Event>,
-    quit_after_shell: bool,
+    exit_command: Option<ExitCommand>,
 }
 
 pub struct Job {
@@ -161,6 +167,10 @@ const JOBS_PANEL_PCT_MAX: u16 = 70;
 const PANEL_DIVIDER_HIT_SLOP: u16 = 1;
 
 impl App {
+    pub(crate) fn take_exit_command(&mut self) -> Option<ExitCommand> {
+        self.exit_command.take()
+    }
+
     pub fn new(
         input_receiver: Receiver<std::io::Result<Event>>,
         input_paused: Arc<AtomicBool>,
@@ -199,7 +209,7 @@ impl App {
             jobs_panel_pct: None,
             resizing_panels: false,
             pending_input_event: None,
-            quit_after_shell: false,
+            exit_command: None,
         }
     }
 }
@@ -225,7 +235,7 @@ impl App {
                     }
                 }
             };
-            if should_quit || self.quit_after_shell {
+            if should_quit || self.exit_command.is_some() {
                 return Ok(());
             }
 
@@ -1133,9 +1143,9 @@ impl App {
         self.selected_job().map(Job::id)
     }
 
-    /// Leave the TUI, run `command` on the tty, then quit turm (the user
-    /// returns to their original shell once the command exits).
-    fn leave_and_run(&mut self, command_label: String, mut command: Command) {
+    /// Leave the TUI and arrange for `command` to run after the App and its
+    /// watcher threads have been dropped.
+    fn leave_and_run(&mut self, command_label: String, command: Command, replace_process: bool) {
         // Stop reading terminal input so the external program owns the tty.
         self.input_paused.store(true, Ordering::SeqCst);
 
@@ -1148,19 +1158,11 @@ impl App {
             return;
         }
 
-        // Run in turm's process group (no setsid: that would strip the
-        // control terminal and break job control). Once the program exits,
-        // turm quits instead of restoring the TUI.
-        if let Err(error) = command.status() {
-            // The TUI is already gone, so report to stderr instead of a dialog.
-            let _ = writeln!(io::stderr(), "turm: failed to run {command_label}: {error}");
-        }
-        // Force a full terminal restore. TUI tools like nvitop may be quit
-        // with Ctrl+C, which kills them without leaving the alternate screen;
-        // without this, stale frames stay on the terminal.
-        let _ = write!(io::stdout(), "\x1b[?1049l\x1b[?25h\x1b[2J\x1b[H");
-        let _ = io::stdout().flush();
-        self.quit_after_shell = true;
+        self.exit_command = Some(ExitCommand {
+            label: command_label,
+            command,
+            replace_process,
+        });
     }
 
     /// Quit turm and start an interactive shell in the selected job's
@@ -1191,7 +1193,10 @@ impl App {
             shell.get_program().to_string_lossy(),
             dir.display()
         );
-        self.leave_and_run(label, shell);
+        // Replace turm with the shell instead of waiting for it. Waiting here
+        // creates a turm -> shell -> turm process chain on repeated use and
+        // keeps every old set of watcher threads alive.
+        self.leave_and_run(label, shell, true);
     }
 
     /// Quit turm, ssh to the selected job's first node and run a monitor:
@@ -1230,7 +1235,7 @@ impl App {
             command.arg(remote);
             format!("ssh {node} htop/top -u {}", job.user)
         };
-        self.leave_and_run(label, command);
+        self.leave_and_run(label, command, false);
     }
 
     /// Copy the selected job's id to the terminal clipboard via OSC 52.
@@ -1439,6 +1444,37 @@ fn leave_terminal() -> io::Result<()> {
         DisableMouseCapture,
     )?;
     io::stdout().flush()
+}
+
+impl ExitCommand {
+    pub(crate) fn execute(mut self) -> io::Result<()> {
+        if self.replace_process {
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+
+                let error = self.command.exec();
+                return Err(io::Error::new(
+                    error.kind(),
+                    format!("failed to run {}: {error}", self.label),
+                ));
+            }
+        }
+
+        let result = self.command.status().map(|_| ());
+
+        // A remotely launched TUI may be killed before it restores the tty.
+        // Keep this post-command cleanup for the non-exec monitor path.
+        let _ = write!(io::stdout(), "\x1b[?1049l\x1b[?25h\x1b[2J\x1b[H");
+        let _ = io::stdout().flush();
+
+        result.map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("failed to run {}: {error}", self.label),
+            )
+        })
+    }
 }
 
 fn execute_command(mut command: Command, command_label: String) -> Result<(), CommandFailure> {
